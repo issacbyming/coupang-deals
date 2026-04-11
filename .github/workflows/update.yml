@@ -1,0 +1,43 @@
+name: 更新 Coupang 5折以下商品
+
+on:
+  schedule:
+    - cron: '0 */6 * * *'   # 每 6 小時（UTC 0:00, 6:00, 12:00, 18:00）
+  workflow_dispatch:          # 允許手動觸發
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安裝依賴
+        run: |
+          pip install playwright playwright-stealth
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 執行爬蟲
+        run: python scraper/run.py
+
+      - name: 產生 HTML
+        run: python generate_html.py
+
+      - name: 推送更新
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "沒有變更"
+          else
+            git commit -m "update: $(date -u +'%Y-%m-%d %H:%M') UTC"
+            git push
+          fi
