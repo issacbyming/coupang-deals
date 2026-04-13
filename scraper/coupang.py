@@ -154,7 +154,13 @@ class CoupangScraper:
                         finally:
                             await page.close()
 
-                await asyncio.gather(*(fetch_detail(d) for d in needs_detail))
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*(fetch_detail(d) for d in needs_detail)),
+                        timeout=300,  # 5 分鐘上限，避免拖垮整個流程
+                    )
+                except asyncio.TimeoutError:
+                    print(f"[coupang] ⚠️ 詳細頁階段超時（5 分鐘），繼續使用已取得的結果")
                 print(f"[coupang] 詳細頁結果：成功 {detail_ok}，失敗 {detail_fail}")
 
             # 最終合併 + 重新過濾（用酷澎售價）
