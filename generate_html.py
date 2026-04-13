@@ -1,9 +1,10 @@
 """產生 Coupang 5折以下特賣靜態頁面，供 GitHub Pages 展示。"""
-import sqlite3, datetime, re
+import sqlite3, datetime, json, re
 from pathlib import Path
 
 DB = Path(__file__).parent / "data" / "deals.db"
 OUT = Path(__file__).parent / "index.html"
+SEEN_FILE = Path(__file__).parent / "seen_urls.json"
 
 # 分類關鍵字（依優先順序匹配，命中第一個就停）
 # ⚠️ 順序非常重要：「具體詞在前、模糊詞在後」，食品飲料放最後（避免單字誤抓）
@@ -52,7 +53,41 @@ def get_deals(date):
     return [dict(r) for r in rows]
 
 
-def card(d):
+def load_seen() -> dict:
+    """載入已見過的 URL 紀錄 {url_key: last_seen_date}。"""
+    if SEEN_FILE.exists():
+        try:
+            return json.loads(SEEN_FILE.read_text("utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def save_seen(seen: dict, current_urls: list[str], today: str):
+    """更新已見過的 URL，清除 7 天前的舊紀錄。"""
+    cutoff = (datetime.date.fromisoformat(today) - datetime.timedelta(days=7)).isoformat()
+    # 更新當前商品
+    for url in current_urls:
+        seen[url] = today
+    # 清除過期
+    seen = {k: v for k, v in seen.items() if v >= cutoff}
+    SEEN_FILE.write_text(json.dumps(seen, ensure_ascii=False), encoding="utf-8")
+
+
+def detect_new(deals: list[dict], seen: dict, today: str) -> set:
+    """回傳今天新出現的商品 URL（之前沒見過的）。"""
+    yesterday = (datetime.date.fromisoformat(today) - datetime.timedelta(days=1)).isoformat()
+    new_urls = set()
+    for d in deals:
+        url_key = d["url"].split("?")[0]
+        last_seen = seen.get(url_key)
+        # 新品 = 從沒見過，或上次出現在昨天之前（消失後回歸）
+        if last_seen is None or last_seen < yesterday:
+            new_urls.add(d["url"])
+    return new_urls
+
+
+def card(d, is_new=False):
     img = d["image_url"] or ""
     if img.startswith("//"):
         img = "https:" + img
@@ -73,16 +108,19 @@ def card(d):
         if img
         else "🛒"
     )
+    new_badge = '<span style="position:absolute;bottom:7px;left:7px;background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">NEW</span>' if is_new else ""
     cat = classify(d["title"])
     return f"""<a class="deal-card" href="{d['url']}" target="_blank"
   data-category="{cat}"
   data-ratio="{d['discount_ratio']}"
   data-sale="{d['sale_price'] or 0}"
   data-orig="{d['original_price'] or 0}"
+  data-new="{'true' if is_new else 'false'}"
   style="text-decoration:none;color:inherit;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #eee;display:flex;flex-direction:column;box-shadow:0 1px 4px rgba(0,0,0,.06)">
   <div style="position:relative;aspect-ratio:1;background:#f9f9f9;overflow:hidden">{img_tag}
     <span style="position:absolute;top:7px;left:7px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px">{fold}折</span>
     <span style="position:absolute;top:7px;right:7px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:2px 7px;border-radius:99px">{cat}</span>
+    {new_badge}
   </div>
   <div style="padding:10px;display:flex;flex-direction:column;gap:5px;flex:1">
     <p style="font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{d['title']}</p>
@@ -96,7 +134,15 @@ def card(d):
 
 today = datetime.date.today().isoformat()
 deals = get_deals(today)
-cards_html = "".join(card(d) for d in deals)
+
+# 新品偵測
+seen = load_seen()
+new_urls = detect_new(deals, seen, today) if seen else set()  # 首次執行無舊資料，不標新品
+new_count = len(new_urls)
+cards_html = "".join(card(d, is_new=(d["url"] in new_urls)) for d in deals)
+# 儲存本次 URL 供下次比對
+save_seen(seen, [d["url"].split("?")[0] for d in deals], today)
+
 min_fold = f"最低 {min(d['discount_ratio'] for d in deals)*10:.1f} 折起" if deals else ""
 
 # 分類統計
@@ -106,6 +152,8 @@ for d in deals:
 
 # 分類按鈕（顯示有商品的）
 cat_buttons = [f'<button class="cat-btn active" data-cat="all">全部 <span class="n">{len(deals)}</span></button>']
+if new_count > 0:
+    cat_buttons.append(f'<button class="cat-btn cat-new" data-cat="new">今日新品 <span class="n">{new_count}</span></button>')
 for name in CATEGORY_NAMES:
     if cat_counts[name] > 0:
         cat_buttons.append(f'<button class="cat-btn" data-cat="{name}">{name} <span class="n">{cat_counts[name]}</span></button>')
@@ -147,6 +195,9 @@ body{{font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5
 .cat-btn:hover{{border-color:#999}}
 .cat-btn.active{{background:#222;color:#fff;border-color:#222}}
 .cat-btn .n{{opacity:.6;font-size:11px;margin-left:3px}}
+.cat-new{{border-color:#16a34a;color:#16a34a}}
+.cat-new:hover{{border-color:#15803d}}
+.cat-new.active{{background:#16a34a;color:#fff;border-color:#16a34a}}
 main{{max-width:1100px;margin:0 auto;padding:16px}}
 .deal-card{{transition:transform .15s,box-shadow .15s}}
 .deal-card:hover{{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.1)!important}}
@@ -191,7 +242,8 @@ footer{{text-align:center;padding:20px;font-size:12px;color:#ccc}}
   function apply() {{
     const q = curSearch.toLowerCase();
     let visible = cards.filter(c => {{
-      if (curCat !== 'all' && c.dataset.category !== curCat) return false;
+      if (curCat === 'new') {{ if (c.dataset.new !== 'true') return false; }}
+      else if (curCat !== 'all' && c.dataset.category !== curCat) return false;
       if (q && !c._searchText.includes(q)) return false;
       return true;
     }});
