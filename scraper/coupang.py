@@ -135,48 +135,71 @@ class CoupangScraper:
             filtered = [d for d in deduped if d["discount_ratio"] is not None and d["discount_ratio"] <= 0.5]
             print(f"[coupang] 抓取總計 {len(all_results)} 筆，去重後 {len(deduped)} 筆，初步 5折以下 {len(filtered)} 筆")
 
-            # ── 第二階段：對首購折扣商品，訪問詳細頁取酷澎售價 ──
-            needs_detail = [d for d in filtered if d.get("discount_type") == "first_purchase"]
-            no_detail = [d for d in filtered if d.get("discount_type") != "first_purchase"]
+            # ── 第二階段：所有 ≤5 折商品都訪問詳細頁取酷澎售價（避免列表價誤導）──
+            # 為什麼全部校正？列表卡片的 strong.price-value 在某些活動頁會顯示「堆疊促銷價」
+            # （含結帳才折、會員券才折），跟點進去實際看到的酷澎售價不同。
+            # 只對首購做校正會漏掉很多誤判，使用者會看到「點進去價錢不一樣」。
+            needs_detail = list(filtered)
 
             if needs_detail:
-                print(f"[coupang] 第二階段：{len(needs_detail)} 件首購商品需訪問詳細頁取酷澎售價")
+                print(f"[coupang] 第二階段：{len(needs_detail)} 件 ≤5折商品需訪問詳細頁驗證酷澎售價")
                 detail_sem = asyncio.Semaphore(10)
-                detail_ok = 0
-                detail_fail = 0
+                detail_ok = 0       # 校正成功（有拿到詳細頁價）
+                detail_changed = 0  # 實際改變了 sale_price
+                detail_fail = 0     # 無法取得詳細頁價（保留列表價，但會標記）
 
                 async def fetch_detail(item):
-                    nonlocal detail_ok, detail_fail
+                    nonlocal detail_ok, detail_changed, detail_fail
                     async with detail_sem:
                         page = await context.new_page()
                         if HAS_STEALTH:
                             await stealth_async(page)
                         try:
                             real_price = await self._scrape_detail_price(page, item["url"])
-                            if real_price and item["original_price"] and item["original_price"] > real_price:
-                                item["sale_price"] = real_price
-                                item["discount_ratio"] = calc_ratio(item["original_price"], real_price)
+                            if real_price:
                                 detail_ok += 1
+                                # 詳細頁價跟列表價不同 → 以詳細頁為準
+                                if item["sale_price"] != real_price:
+                                    detail_changed += 1
+                                    item["sale_price"] = real_price
+                                    if item["original_price"] and item["original_price"] > real_price:
+                                        item["discount_ratio"] = calc_ratio(item["original_price"], real_price)
+                                item["price_verified"] = True
                             else:
                                 detail_fail += 1
+                                item["price_verified"] = False
                         except Exception:
                             detail_fail += 1
+                            item["price_verified"] = False
                         finally:
                             await page.close()
 
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(*(fetch_detail(d) for d in needs_detail)),
-                        timeout=300,  # 5 分鐘上限，避免拖垮整個流程
+                        timeout=420,  # 7 分鐘上限（項目變多要給更多時間）
                     )
                 except asyncio.TimeoutError:
-                    print(f"[coupang] ⚠️ 詳細頁階段超時（5 分鐘），繼續使用已取得的結果")
-                print(f"[coupang] 詳細頁結果：成功 {detail_ok}，失敗 {detail_fail}")
+                    print(f"[coupang] ⚠️ 詳細頁階段超時（7 分鐘），繼續使用已取得的結果")
+                print(f"[coupang] 詳細頁結果：成功 {detail_ok}（修正 {detail_changed} 筆），失敗 {detail_fail}")
 
-            # 最終合併 + 重新過濾（用酷澎售價）
-            all_items = no_detail + needs_detail
-            filtered = [d for d in all_items if d.get("discount_ratio") is not None and d["discount_ratio"] <= 0.5]
-            print(f"[coupang] 最終篩選：{len(filtered)} 件 ≤5折商品（酷澎售價）")
+            # 最終過濾：以校正後的價格重新篩 ≤5 折
+            # 注意：校正失敗的項目（price_verified=False）不剔除，保留列表價
+            # 原因：Akamai 可能暫時擋了詳細頁，若全部剔除會把一大半商品砍掉
+            # HTML 層會以視覺差異標記「未驗證」的項目
+            final = []
+            dropped_over_fold = 0
+            unverified_count = 0
+            for d in filtered:
+                if d.get("discount_ratio") is None or d["discount_ratio"] > 0.5:
+                    dropped_over_fold += 1
+                    continue
+                if d.get("price_verified") is False:
+                    unverified_count += 1
+                final.append(d)
+            filtered = final
+            print(f"[coupang] 最終篩選：{len(filtered)} 件 ≤5折商品（已校正酷澎售價）")
+            print(f"[coupang]   剔除 {dropped_over_fold} 件校正後超過 5 折；保留 {unverified_count} 件未驗證")
 
             await browser.close()
 
@@ -204,11 +227,21 @@ class CoupangScraper:
         return results
 
     async def _parse_card(self, card, today: str, now: str) -> dict | None:
-        # URL
-        link_el = await card.query_selector("a")
-        if not link_el:
-            return None
-        href = await link_el.get_attribute("href")
+        # URL：優先找帶 itemId 的 <a>（鎖定特定變體的價格），避免點進去跳到預設變體價格不同
+        href = None
+        links = await card.query_selector_all("a")
+        for link in links:
+            h = await link.get_attribute("href")
+            if h and "itemId=" in h:
+                href = h
+                break
+        if not href:
+            # fallback: 第一個有 href 的 <a>
+            for link in links:
+                h = await link.get_attribute("href")
+                if h:
+                    href = h
+                    break
         if not href:
             return None
         url = href if href.startswith("http") else BASE_URL + href
@@ -254,14 +287,16 @@ class CoupangScraper:
         if discount_ratio is None:
             return None
 
-        # 折扣類型：首購 / WOW / 一般
+        # 折扣類型：首購 / WOW / 一般（用整張卡片文字比對，避免漏抓標籤變體）
         discount_type = "regular"
-        label_el = await card.query_selector(DISCOUNT_LABEL_SEL)
-        if label_el:
-            label_text = (await label_el.inner_text()).strip()
-            if "首購" in label_text:
+        try:
+            card_text = await card.inner_text()
+        except Exception:
+            card_text = ""
+        if card_text:
+            if "首購" in card_text or "新會員價" in card_text or "首次購買" in card_text:
                 discount_type = "first_purchase"
-            elif "WOW" in label_text:
+            elif "WOW" in card_text or "會員限定" in card_text:
                 discount_type = "wow"
 
         return {

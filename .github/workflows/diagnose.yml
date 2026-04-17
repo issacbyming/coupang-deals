@@ -1,0 +1,39 @@
+name: 診斷（手動探索：搜尋頁 / 售價驗證 / f 頁面）
+
+on:
+  workflow_dispatch:
+    inputs:
+      script:
+        description: '要執行的診斷腳本'
+        required: true
+        default: 'probe_search.py'
+        type: choice
+        options:
+          - probe_search.py
+          - probe_f_pages.py
+          - diagnose_pricing.py
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安裝 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安裝依賴
+        run: |
+          pip install playwright playwright-stealth
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 執行診斷腳本
+        run: python scraper/${{ inputs.script }}

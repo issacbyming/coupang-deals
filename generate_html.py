@@ -109,6 +109,11 @@ def card(d, is_new=False):
         else "🛒"
     )
     new_badge = '<span style="position:absolute;bottom:7px;left:7px;background:#16a34a;color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px">NEW</span>' if is_new else ""
+
+    # 價格驗證狀態：1 = 已驗證（詳細頁酷澎售價），0/None = 未驗證（列表價）
+    verified = bool(d.get("price_verified"))
+    price_note = "" if verified else '<span title="點進詳細頁時實際售價可能略有差異" style="font-size:10px;color:#999;margin-left:4px">⚠</span>'
+    card_opacity = "" if verified else "opacity:.85;"
     cat = classify(d["title"])
     return f"""<a class="deal-card" href="{d['url']}" target="_blank"
   data-category="{cat}"
@@ -116,7 +121,8 @@ def card(d, is_new=False):
   data-sale="{d['sale_price'] or 0}"
   data-orig="{d['original_price'] or 0}"
   data-new="{'true' if is_new else 'false'}"
-  style="text-decoration:none;color:inherit;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #eee;display:flex;flex-direction:column;box-shadow:0 1px 4px rgba(0,0,0,.06)">
+  data-verified="{'true' if verified else 'false'}"
+  style="text-decoration:none;color:inherit;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #eee;display:flex;flex-direction:column;box-shadow:0 1px 4px rgba(0,0,0,.06);{card_opacity}">
   <div style="position:relative;aspect-ratio:1;background:#f9f9f9;overflow:hidden">{img_tag}
     <span style="position:absolute;top:7px;left:7px;background:#ef4444;color:#fff;font-size:11px;font-weight:700;padding:3px 8px;border-radius:99px">{fold}折</span>
     <span style="position:absolute;top:7px;right:7px;background:rgba(0,0,0,.55);color:#fff;font-size:10px;padding:2px 7px;border-radius:99px">{cat}</span>
@@ -125,7 +131,7 @@ def card(d, is_new=False):
   <div style="padding:10px;display:flex;flex-direction:column;gap:5px;flex:1">
     <p style="font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{d['title']}</p>
     <div style="margin-top:auto;display:flex;align-items:flex-end;justify-content:space-between">
-      <div><span style="font-size:16px;font-weight:700;color:#dc2626">NT${int(d['sale_price']):,}</span><br>{orig}</div>
+      <div><span style="font-size:16px;font-weight:700;color:#dc2626">NT${int(d['sale_price']):,}</span>{price_note}<br>{orig}</div>
       {saving}
     </div>
   </div>

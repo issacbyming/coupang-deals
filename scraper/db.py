@@ -12,7 +12,8 @@ CREATE TABLE IF NOT EXISTS deals (
     sale_price     REAL,
     discount_ratio REAL,
     date           TEXT,
-    fetched_at     TEXT
+    fetched_at     TEXT,
+    price_verified INTEGER DEFAULT 0
 );
 """
 
@@ -22,15 +23,23 @@ def init_db(db_path: str) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.row_factory = sqlite3.Row
     conn.execute(SCHEMA)
+    # 現有資料庫若缺欄位則補上（idempotent）
+    try:
+        conn.execute("ALTER TABLE deals ADD COLUMN price_verified INTEGER DEFAULT 0")
+    except sqlite3.OperationalError:
+        pass  # 欄位已存在
     conn.commit()
     return conn
 
 
 def upsert_deal(conn: sqlite3.Connection, deal: dict) -> None:
+    # 確保 price_verified 存在（True/False → 1/0）
+    deal = dict(deal)
+    deal["price_verified"] = 1 if deal.get("price_verified") else 0
     conn.execute(
         """
-        INSERT INTO deals (title, url, image_url, original_price, sale_price, discount_ratio, date, fetched_at)
-        VALUES (:title, :url, :image_url, :original_price, :sale_price, :discount_ratio, :date, :fetched_at)
+        INSERT INTO deals (title, url, image_url, original_price, sale_price, discount_ratio, date, fetched_at, price_verified)
+        VALUES (:title, :url, :image_url, :original_price, :sale_price, :discount_ratio, :date, :fetched_at, :price_verified)
         ON CONFLICT(url) DO UPDATE SET
             title = excluded.title,
             image_url = excluded.image_url,
@@ -38,7 +47,8 @@ def upsert_deal(conn: sqlite3.Connection, deal: dict) -> None:
             sale_price = excluded.sale_price,
             discount_ratio = excluded.discount_ratio,
             date = excluded.date,
-            fetched_at = excluded.fetched_at
+            fetched_at = excluded.fetched_at,
+            price_verified = excluded.price_verified
         """,
         deal,
     )
