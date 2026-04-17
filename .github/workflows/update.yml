@@ -42,5 +42,14 @@ jobs:
             echo "沒有變更"
           else
             git commit -m "update: $(date -u +'%Y-%m-%d %H:%M') UTC"
-            git push
+            # 若有人同時推送，先 pull --rebase 再推
+            for i in 1 2 3; do
+              if git push; then
+                exit 0
+              fi
+              echo "推送被拒，嘗試 rebase 後重試（$i/3）"
+              git pull --rebase
+            done
+            echo "推送失敗（3 次）"
+            exit 1
           fi
