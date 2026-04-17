@@ -28,8 +28,8 @@ HEADERS = {
     "sec-ch-ua-platform": '"macOS"',
 }
 
-# 掃描範圍
-ID_RANGE = range(1, 500)
+# 掃描範圍（每週探測最高 ID 若接近上限，應調高）
+ID_RANGE = range(1, 700)
 PARALLELISM = 5  # Akamai 友善：低並行度
 
 
