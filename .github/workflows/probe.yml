@@ -1,17 +1,17 @@
-name: 更新 Coupang 5折以下商品
+name: 每週探測新 campaign IDs
 
 on:
   schedule:
-    - cron: '0 */6 * * *'   # 每 6 小時（UTC 0:00, 6:00, 12:00, 18:00）
-  workflow_dispatch:          # 允許手動觸發
+    - cron: '0 20 * * 0'   # 每週一台灣時間 04:00（UTC Sunday 20:00）
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
-  update:
+  probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -27,20 +27,18 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      - name: 執行爬蟲
-        run: python scraper/run.py
+      - name: 執行探測
+        run: python scraper/probe_campaigns.py
 
-      - name: 產生 HTML
-        run: python generate_html.py
-
-      - name: 推送更新
+      - name: 提交更新的 campaign 清單
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add index.html seen_urls.json
+          git add scraper/valid_campaigns.txt
           if git diff --cached --quiet; then
-            echo "沒有變更"
+            echo "campaign 清單無變更"
           else
-            git commit -m "update: $(date -u +'%Y-%m-%d %H:%M') UTC"
+            count=$(tr ',' '\n' < scraper/valid_campaigns.txt | wc -l | tr -d ' ')
+            git commit -m "probe: 更新有效 campaigns（$count 個）"
             git push
           fi

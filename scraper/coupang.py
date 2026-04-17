@@ -6,6 +6,7 @@ Coupang 台灣（tw.coupang.com）爬蟲
 import asyncio
 import datetime
 import re
+from pathlib import Path
 from playwright.async_api import async_playwright, Page, BrowserContext, TimeoutError as PlaywrightTimeout
 try:
     from playwright_stealth import stealth_async
@@ -15,19 +16,28 @@ except ImportError:
 
 from utils import parse_price, calc_ratio
 
-# 已驗證有效的 campaign IDs（從 probe_campaigns.py 掃描得出）
-# 每個 campaign 對應一個促銷活動，商品有重疊但會涵蓋更廣
-CAMPAIGN_IDS = [
-    52, 54, 59, 60, 72, 74, 75, 76, 77, 82, 83, 84, 87,
-    103, 104, 105, 107, 124, 125, 126, 127, 129, 131, 132,
-    136, 137, 138, 139, 140, 141, 142, 143, 144, 145, 146,
-    147, 148, 149, 150, 151, 152, 155, 156, 157, 158,
-    160, 161, 162, 163, 164, 165, 166, 167, 168, 170,
-    172, 173, 182, 183, 184, 185, 186, 187, 188, 189,
-    190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
-]
+# Campaign IDs 從 valid_campaigns.txt 讀取（由 probe_campaigns.py 每週自動更新）
+# 若檔案不存在，使用 fallback 清單
+_FALLBACK_IDS = [52, 54, 59, 60, 72, 74, 75, 76, 77, 82, 83, 84, 87, 103, 104, 105, 107,
+                 124, 125, 126, 127, 129, 131, 132, 136, 137, 138, 139, 140, 141, 142, 143,
+                 144, 145, 146, 147, 148, 149, 150, 151, 152, 155, 156, 157, 158, 160, 161,
+                 162, 163, 164, 165, 166, 167, 168, 170, 172, 173, 182, 183, 184, 185, 186,
+                 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199]
 
+def _load_campaign_ids() -> list[int]:
+    f = Path(__file__).parent / "valid_campaigns.txt"
+    if f.exists():
+        try:
+            ids = [int(x) for x in f.read_text("utf-8").strip().split(",") if x.strip()]
+            if ids:
+                return ids
+        except ValueError:
+            pass
+    return _FALLBACK_IDS
+
+CAMPAIGN_IDS = _load_campaign_ids()
 CAMPAIGN_URLS = [f"https://www.tw.coupang.com/np/campaigns/{cid}" for cid in CAMPAIGN_IDS]
+print(f"[coupang] 載入 {len(CAMPAIGN_IDS)} 個 campaigns")
 
 # 商品卡片 selector
 PRODUCT_SELECTOR = "li.baby-product"
@@ -61,7 +71,7 @@ HEADERS = {
 
 
 class CoupangScraper:
-    def __init__(self, headless: bool = True, max_items_per_page: int = 100, parallelism: int = 5):
+    def __init__(self, headless: bool = True, max_items_per_page: int = 100, parallelism: int = 8):
         self.headless = headless
         self.max_items_per_page = max_items_per_page
         self.parallelism = parallelism
